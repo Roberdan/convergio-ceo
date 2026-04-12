@@ -216,8 +216,8 @@ dependencies = [
 
 [[package]]
 name = "convergio-db"
-version = "0.1.7"
-source = "git+https://github.com/Roberdan/convergio-sdk?tag=v0.1.7#8d9c143cd5a6c16be5eb274cc09b2540307b620a"
+version = "0.1.9"
+source = "git+https://github.com/Roberdan/convergio-sdk?tag=v0.1.9#ccbc95bb56a3a8e78fb713214f3f8b8ea9341f5a"
 dependencies = [
  "chrono",
  "convergio-types",
@@ -231,8 +231,8 @@ dependencies = [
 
 [[package]]
 name = "convergio-types"
-version = "0.1.7"
-source = "git+https://github.com/Roberdan/convergio-sdk?tag=v0.1.7#8d9c143cd5a6c16be5eb274cc09b2540307b620a"
+version = "0.1.9"
+source = "git+https://github.com/Roberdan/convergio-sdk?tag=v0.1.9#ccbc95bb56a3a8e78fb713214f3f8b8ea9341f5a"
 dependencies = [
  "axum",
  "chrono",

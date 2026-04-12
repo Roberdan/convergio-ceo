@@ -1,7 +1,6 @@
 //! CEO pattern unit and integration tests.
 
 #[cfg(test)]
-#[allow(dead_code)]
 mod tests {
     use serde_json::json;
 
@@ -146,13 +145,13 @@ mod tests {
     fn circuit_opens_on_high_error_rate() {
         let cb = CircuitBreaker::new();
         // 20 calls, 2 errors = 10% > 5% threshold
+        // record() auto-evaluates, so circuit opens when threshold hit
         for _ in 0..18 {
             cb.record(true);
         }
         for _ in 0..2 {
             cb.record(false);
         }
-        cb.evaluate();
         assert!(cb.is_open());
     }
 
@@ -162,7 +161,6 @@ mod tests {
         for _ in 0..20 {
             cb.record(true);
         }
-        cb.evaluate();
         assert!(!cb.is_open());
     }
 

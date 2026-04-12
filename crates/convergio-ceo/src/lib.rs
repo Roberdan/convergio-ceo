@@ -52,17 +52,27 @@ pub struct CeoResponse {
 pub struct CeoEngine {
     pub daemon_url: String,
     pub api_token: Option<String>,
+    client: reqwest::Client,
     tool_menu: Vec<ToolMenuEntry>,
     tool_menu_prompt: String,
 }
+
+// reqwest::Client is internally Arc-based; safe across unwind boundaries.
+impl std::panic::UnwindSafe for CeoEngine {}
+impl std::panic::RefUnwindSafe for CeoEngine {}
 
 // ── Engine ───────────────────────────────────────────────────────────────────
 
 impl CeoEngine {
     pub async fn new(daemon_url: &str, api_token: Option<&str>) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_default();
         let mut engine = Self {
             daemon_url: daemon_url.to_string(),
             api_token: api_token.map(String::from),
+            client,
             tool_menu: Vec::new(),
             tool_menu_prompt: String::new(),
         };
@@ -72,8 +82,7 @@ impl CeoEngine {
 
     pub async fn refresh_tool_menu(&mut self) {
         let url = format!("{}/api/meta/mcp-tools", self.daemon_url);
-        let client = reqwest::Client::new();
-        let mut req = client.get(&url);
+        let mut req = self.client.get(&url);
         if let Some(t) = &self.api_token {
             req = req.header("Authorization", format!("Bearer {t}"));
         }
@@ -215,12 +224,16 @@ impl CeoEngine {
             "prompt": prompt, "max_tokens": 256,
             "tier_hint": "t1", "agent_id": "ceo-router",
         });
-        let client = reqwest::Client::new();
-        let mut req = client.post(&url).json(&body);
+        let mut req = self.client.post(&url).json(&body);
         if let Some(t) = &self.api_token {
             req = req.header("Authorization", format!("Bearer {t}"));
         }
-        let resp = req.send().await.map_err(|e| e.to_string())?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .error_for_status()
+            .map_err(|e| format!("inference HTTP error: {e}"))?;
         let json: Value = resp.json().await.map_err(|e| e.to_string())?;
         let content = json
             .get("content")
@@ -245,34 +258,54 @@ impl CeoEngine {
         let mut path = entry.path.clone();
         for p in &entry.params {
             if let Some(val) = params.get(p.as_str()) {
-                let r = match val {
+                let raw = match val {
                     Value::Number(n) => n.to_string(),
                     Value::String(s) => s.clone(),
                     _ => val.to_string(),
                 };
-                path = path.replace(&format!(":{p}"), &r);
+                // URL-encode to prevent path injection
+                let encoded = urlencoding::encode(&raw);
+                path = path.replace(&format!(":{p}"), &encoded);
             }
         }
         let url = format!("{}{path}", self.daemon_url);
-        let client = reqwest::Client::new();
         let resp = match entry.method.as_str() {
-            "POST" | "PUT" => {
+            "POST" => {
                 let body = strip_path_params(params, &entry.params);
-                let mut r = client.post(&url).json(&body);
+                let mut r = self.client.post(&url).json(&body);
+                if let Some(t) = &self.api_token {
+                    r = r.header("Authorization", format!("Bearer {t}"));
+                }
+                r.send().await.map_err(|e| e.to_string())?
+            }
+            "PUT" => {
+                let body = strip_path_params(params, &entry.params);
+                let mut r = self.client.put(&url).json(&body);
+                if let Some(t) = &self.api_token {
+                    r = r.header("Authorization", format!("Bearer {t}"));
+                }
+                r.send().await.map_err(|e| e.to_string())?
+            }
+            "DELETE" => {
+                let mut r = self.client.delete(&url);
                 if let Some(t) = &self.api_token {
                     r = r.header("Authorization", format!("Bearer {t}"));
                 }
                 r.send().await.map_err(|e| e.to_string())?
             }
             _ => {
-                let mut r = client.get(&url);
+                let mut r = self.client.get(&url);
                 if let Some(t) = &self.api_token {
                     r = r.header("Authorization", format!("Bearer {t}"));
                 }
                 r.send().await.map_err(|e| e.to_string())?
             }
         };
-        resp.json::<Value>().await.map_err(|e| e.to_string())
+        resp.error_for_status()
+            .map_err(|e| format!("dispatch HTTP error: {e}"))?
+            .json::<Value>()
+            .await
+            .map_err(|e| e.to_string())
     }
 
     async fn record_usage(&self, model: &Option<String>, latency_ms: u64) {
@@ -283,8 +316,7 @@ impl CeoEngine {
             "input_tokens": 256, "output_tokens": 64, "cost_usd": 0.0001,
             "execution_host": format!("ceo-routing-{}ms", latency_ms),
         });
-        let client = reqwest::Client::new();
-        let mut req = client.post(&url).json(&body);
+        let mut req = self.client.post(&url).json(&body);
         if let Some(t) = &self.api_token {
             req = req.header("Authorization", format!("Bearer {t}"));
         }

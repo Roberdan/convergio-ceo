@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/Roberdan/convergio-ceo/compare/convergio-ceo-v0.1.1...convergio-ceo-v0.1.2) (2026-04-12)
+
+
+### Bug Fixes
+
+* align SDK dependency to v0.1.9 for type compatibility ([f7f259b](https://github.com/Roberdan/convergio-ceo/commit/f7f259b7065fb54c3347484f64fee7c4970356bc))
+
 ## [0.1.1](https://github.com/Roberdan/convergio-ceo/compare/convergio-ceo-v0.1.0...convergio-ceo-v0.1.1) (2026-04-12)
 
 

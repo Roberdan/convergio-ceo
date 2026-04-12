@@ -127,15 +127,18 @@ impl CircuitBreaker {
 
     /// Record a routing outcome.
     pub fn record(&self, success: bool) {
-        self.total.fetch_add(1, Ordering::Relaxed);
+        self.total.fetch_add(1, Ordering::SeqCst);
         if !success {
-            self.errors.fetch_add(1, Ordering::Relaxed);
+            self.errors.fetch_add(1, Ordering::SeqCst);
         }
         // Reset counters every 100 calls to keep window fresh
-        if self.total.load(Ordering::Relaxed) >= 100 {
-            self.total.store(0, Ordering::Relaxed);
-            self.errors.store(0, Ordering::Relaxed);
+        let total = self.total.load(Ordering::SeqCst);
+        if total >= 100 {
+            self.total.store(0, Ordering::SeqCst);
+            self.errors.store(0, Ordering::SeqCst);
         }
+        // Auto-evaluate after each recording
+        self.evaluate();
     }
 
     /// Check if circuit is open (should use fallback).
@@ -151,8 +154,8 @@ impl CircuitBreaker {
 
     /// Evaluate whether to open or close the circuit.
     pub fn evaluate(&self) {
-        let total = self.total.load(Ordering::Relaxed);
-        let errors = self.errors.load(Ordering::Relaxed);
+        let total = self.total.load(Ordering::SeqCst);
+        let errors = self.errors.load(Ordering::SeqCst);
         if total >= 20 && (errors as f64 / total as f64) > 0.05 {
             let mut guard = self.open_since.lock().unwrap();
             if guard.is_none() {
@@ -168,8 +171,8 @@ impl CircuitBreaker {
         if guard.is_some() {
             tracing::info!("ceo circuit breaker CLOSED after successful probe");
             *guard = None;
-            self.total.store(0, Ordering::Relaxed);
-            self.errors.store(0, Ordering::Relaxed);
+            self.total.store(0, Ordering::SeqCst);
+            self.errors.store(0, Ordering::SeqCst);
         }
     }
 }

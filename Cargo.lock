@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "convergio-ceo"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "axum",
  "convergio-db",

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.5](https://github.com/Roberdan/convergio-ceo/compare/v0.1.4...v0.1.5) (2026-04-18)
+
+
+### Bug Fixes
+
+* security and quality audit pass 2 ([d910d41](https://github.com/Roberdan/convergio-ceo/commit/d910d413596d070e25efba27335860744c6b0f37))
+* security audit pass  info leak, mutex poison, error swallowing2 ([d5a9980](https://github.com/Roberdan/convergio-ceo/commit/d5a99809f95edd1e5e9ed666ec714920659e928a))
+
 ## [0.1.4](https://github.com/Roberdan/convergio-ceo/compare/v0.1.3...v0.1.4) (2026-04-14)
 
 

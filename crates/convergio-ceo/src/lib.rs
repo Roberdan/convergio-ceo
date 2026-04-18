@@ -3,6 +3,7 @@
 //! Flow: build tool menu → prompt LLM (Haiku) → parse JSON → validate → dispatch.
 
 pub mod ceo_audit;
+pub mod ceo_dispatch;
 pub mod ceo_fallback;
 pub mod ceo_helpers;
 pub mod ceo_routes;
@@ -68,7 +69,10 @@ impl CeoEngine {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .unwrap_or_default();
+            .unwrap_or_else(|e| {
+                warn!("ceo: client builder failed ({e}), using default (no timeout)");
+                reqwest::Client::default()
+            });
         let mut engine = Self {
             daemon_url: daemon_url.to_string(),
             api_token: api_token.map(String::from),
@@ -172,15 +176,18 @@ impl CeoEngine {
                 routing_model: model_used,
                 routing_latency_ms: Some(latency),
             },
-            Err(e) => CeoResponse {
-                tool_used: Some(tool_name),
-                params: Some(params),
-                result: None,
-                error: Some(format!("Dispatch failed: {e}")),
-                suggestion: None,
-                routing_model: model_used,
-                routing_latency_ms: Some(latency),
-            },
+            Err(e) => {
+                warn!("ceo: dispatch failed for {tool_name}: {e}");
+                CeoResponse {
+                    tool_used: Some(tool_name),
+                    params: Some(params),
+                    result: None,
+                    error: Some("Dispatch failed: internal error".to_string()),
+                    suggestion: None,
+                    routing_model: model_used,
+                    routing_latency_ms: Some(latency),
+                }
+            }
         }
     }
 
@@ -218,7 +225,7 @@ impl CeoEngine {
         }
     }
 
-    async fn call_inference(&self, prompt: &str) -> Result<(String, String), String> {
+    pub(crate) async fn call_inference(&self, prompt: &str) -> Result<(String, String), String> {
         let url = format!("{}/api/inference/complete", self.daemon_url);
         let body = json!({
             "prompt": prompt, "max_tokens": 256,
@@ -246,82 +253,5 @@ impl CeoEngine {
             .unwrap_or("unknown")
             .to_string();
         Ok((content, model))
-    }
-
-    async fn dispatch(&self, tool_name: &str, params: &Value) -> Result<Value, String> {
-        let entry = self
-            .tool_menu
-            .iter()
-            .find(|t| t.name == tool_name)
-            .ok_or_else(|| format!("Unknown tool: {tool_name}"))?;
-
-        let mut path = entry.path.clone();
-        for p in &entry.params {
-            if let Some(val) = params.get(p.as_str()) {
-                let raw = match val {
-                    Value::Number(n) => n.to_string(),
-                    Value::String(s) => s.clone(),
-                    _ => val.to_string(),
-                };
-                // URL-encode to prevent path injection
-                let encoded = urlencoding::encode(&raw);
-                path = path.replace(&format!(":{p}"), &encoded);
-            }
-        }
-        let url = format!("{}{path}", self.daemon_url);
-        let resp = match entry.method.as_str() {
-            "POST" => {
-                let body = strip_path_params(params, &entry.params);
-                let mut r = self.client.post(&url).json(&body);
-                if let Some(t) = &self.api_token {
-                    r = r.header("Authorization", format!("Bearer {t}"));
-                }
-                r.send().await.map_err(|e| e.to_string())?
-            }
-            "PUT" => {
-                let body = strip_path_params(params, &entry.params);
-                let mut r = self.client.put(&url).json(&body);
-                if let Some(t) = &self.api_token {
-                    r = r.header("Authorization", format!("Bearer {t}"));
-                }
-                r.send().await.map_err(|e| e.to_string())?
-            }
-            "DELETE" => {
-                let mut r = self.client.delete(&url);
-                if let Some(t) = &self.api_token {
-                    r = r.header("Authorization", format!("Bearer {t}"));
-                }
-                r.send().await.map_err(|e| e.to_string())?
-            }
-            _ => {
-                let mut r = self.client.get(&url);
-                if let Some(t) = &self.api_token {
-                    r = r.header("Authorization", format!("Bearer {t}"));
-                }
-                r.send().await.map_err(|e| e.to_string())?
-            }
-        };
-        resp.error_for_status()
-            .map_err(|e| format!("dispatch HTTP error: {e}"))?
-            .json::<Value>()
-            .await
-            .map_err(|e| e.to_string())
-    }
-
-    async fn record_usage(&self, model: &Option<String>, latency_ms: u64) {
-        let url = format!("{}/api/tracking/tokens", self.daemon_url);
-        let body = json!({
-            "agent": "ceo-router",
-            "model": model.as_deref().unwrap_or("unknown"),
-            "input_tokens": 256, "output_tokens": 64, "cost_usd": 0.0001,
-            "execution_host": format!("ceo-routing-{}ms", latency_ms),
-        });
-        let mut req = self.client.post(&url).json(&body);
-        if let Some(t) = &self.api_token {
-            req = req.header("Authorization", format!("Bearer {t}"));
-        }
-        if let Err(e) = req.send().await {
-            debug!("ceo: failed to record usage: {e}");
-        }
     }
 }

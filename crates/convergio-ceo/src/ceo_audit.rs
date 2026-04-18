@@ -46,7 +46,7 @@ pub fn record_routing(
 ) {
     if let Ok(conn) = pool.get() {
         let params_str = params.map(|p| p.to_string());
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "INSERT INTO ceo_routing_log \
              (instruction, tool_chosen, params_json, routing_method, latency_ms, success) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -58,7 +58,9 @@ pub fn record_routing(
                 latency_ms as i64,
                 success as i32,
             ],
-        );
+        ) {
+            tracing::warn!("ceo: failed to record audit log: {e}");
+        }
     }
 }
 
@@ -76,10 +78,13 @@ struct LogQuery {
 }
 
 async fn handle_log(State(pool): State<ConnPool>, Query(q): Query<LogQuery>) -> Json<Value> {
-    let limit = q.limit.unwrap_or(50).min(200);
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let conn = match pool.get() {
         Ok(c) => c,
-        Err(e) => return Json(json!({"error": e.to_string()})),
+        Err(e) => {
+            tracing::warn!("ceo: audit log pool error: {e}");
+            return Json(json!({"error": "audit log unavailable"}));
+        }
     };
     let mut stmt = match conn.prepare(
         "SELECT id, timestamp, instruction, tool_chosen, params_json, \
@@ -87,7 +92,10 @@ async fn handle_log(State(pool): State<ConnPool>, Query(q): Query<LogQuery>) -> 
          FROM ceo_routing_log ORDER BY id DESC LIMIT ?1",
     ) {
         Ok(s) => s,
-        Err(e) => return Json(json!({"error": e.to_string()})),
+        Err(e) => {
+            tracing::warn!("ceo: audit log query failed: {e}");
+            return Json(json!({"error": "failed to query audit log"}));
+        }
     };
     let rows: Vec<Value> = match stmt.query_map([limit], |r| {
         Ok(json!({
@@ -143,9 +151,8 @@ impl CircuitBreaker {
 
     /// Check if circuit is open (should use fallback).
     pub fn is_open(&self) -> bool {
-        let guard = self.open_since.lock().unwrap();
+        let guard = self.open_since.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(opened) = *guard {
-            // After 5 min, allow one probe
             opened.elapsed().as_secs() < 300
         } else {
             false
@@ -157,7 +164,7 @@ impl CircuitBreaker {
         let total = self.total.load(Ordering::SeqCst);
         let errors = self.errors.load(Ordering::SeqCst);
         if total >= 20 && (errors as f64 / total as f64) > 0.05 {
-            let mut guard = self.open_since.lock().unwrap();
+            let mut guard = self.open_since.lock().unwrap_or_else(|e| e.into_inner());
             if guard.is_none() {
                 tracing::warn!("ceo circuit breaker OPEN: {errors}/{total} errors");
                 *guard = Some(std::time::Instant::now());
@@ -167,7 +174,7 @@ impl CircuitBreaker {
 
     /// Close circuit after successful probe.
     pub fn close(&self) {
-        let mut guard = self.open_since.lock().unwrap();
+        let mut guard = self.open_since.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_some() {
             tracing::info!("ceo circuit breaker CLOSED after successful probe");
             *guard = None;
